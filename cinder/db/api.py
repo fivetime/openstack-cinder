@@ -118,15 +118,20 @@ def _add_sqlalchemy_tracing(engine):
 
     enginefacade calls this when it creates the engine, on the first
     database access, so the service has parsed its configuration by then.
+    The [profiler] options are registered by cinder.service, which also
+    sets up osprofiler. A process that never imported it has no profiler
+    to report to; importing it here would also register its command line
+    options after the arguments were parsed and fail the first database
+    access.
     """
-    # NOTE(geguileo): To avoid a cyclical dependency we import the
-    # group here.  Dependency cycle is objects.base requires db.api,
-    # which requires service which requires objects.base
-    CONF.import_group("profiler", "cinder.service")
+    try:
+        profiler = CONF.profiler
+    except cfg.NoSuchOptError:
+        return
     if (
         osprofiler_sqlalchemy
-        and CONF.profiler.enabled
-        and CONF.profiler.trace_sqlalchemy
+        and profiler.enabled
+        and profiler.trace_sqlalchemy
     ):
         osprofiler_sqlalchemy.add_tracing(sa, engine, "db")
 
