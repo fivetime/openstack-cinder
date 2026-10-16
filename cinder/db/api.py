@@ -113,18 +113,32 @@ DEFAULT_QUOTA_NAME = 'default'
 main_context_manager = enginefacade.transaction_context()
 
 
+def _add_sqlalchemy_tracing(engine):
+    """Trace the engine's SQL statements if [profiler] asks for it.
+
+    enginefacade calls this when it creates the engine, on the first
+    database access, so the service has parsed its configuration by then.
+    """
+    # NOTE(geguileo): To avoid a cyclical dependency we import the
+    # group here.  Dependency cycle is objects.base requires db.api,
+    # which requires service which requires objects.base
+    CONF.import_group("profiler", "cinder.service")
+    if (
+        osprofiler_sqlalchemy
+        and CONF.profiler.enabled
+        and CONF.profiler.trace_sqlalchemy
+    ):
+        osprofiler_sqlalchemy.add_tracing(sa, engine, "db")
+
+
+main_context_manager.append_on_engine_create(_add_sqlalchemy_tracing)
+
+
 ###################
 
 
 def configure(conf):
     main_context_manager.configure(**dict(conf.database))
-    # NOTE(geguileo): To avoid a cyclical dependency we import the
-    # group here.  Dependency cycle is objects.base requires db.api,
-    # which requires service which requires objects.base
-    CONF.import_group("profiler", "cinder.service")
-    if CONF.profiler.enabled:
-        if CONF.profiler.trace_sqlalchemy:
-            lambda eng: osprofiler_sqlalchemy.add_tracing(sa, eng, "db")
 
 
 def get_engine():

@@ -1,0 +1,8 @@
+---
+fixes:
+  - |
+    ``[profiler] trace_sqlalchemy`` works again. Since the services moved to
+    the enginefacade, the hook that adds osprofiler's SQLAlchemy tracing to
+    the database engine was never registered, so traces had no ``db`` spans
+    whatever the option said. The hook is now added when the engine is
+    created.
