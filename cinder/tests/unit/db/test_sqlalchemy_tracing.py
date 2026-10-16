@@ -14,7 +14,6 @@
 
 from unittest import mock
 
-from oslo_config import cfg
 import sqlalchemy as sa
 
 from cinder.db import api as db_api
@@ -59,17 +58,6 @@ class SQLAlchemyTracingTestCase(test.TestCase):
         self.override_config('trace_sqlalchemy', False, group='profiler')
 
         self._new_engine()
-
-        self.osprofiler_sqlalchemy.add_tracing.assert_not_called()
-
-    def test_profiler_options_not_registered(self):
-        # A process that parsed its configuration without importing
-        # cinder.service, such as a tool, must still get an engine.
-        conf = cfg.ConfigOpts()
-        conf([], project='cinder')
-        self.patch('cinder.db.api.CONF', conf)
-
-        db_api._add_sqlalchemy_tracing(mock.sentinel.engine)
 
         self.osprofiler_sqlalchemy.add_tracing.assert_not_called()
 

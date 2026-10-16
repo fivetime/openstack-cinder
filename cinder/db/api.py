@@ -118,20 +118,15 @@ def _add_sqlalchemy_tracing(engine):
 
     enginefacade calls this when it creates the engine, on the first
     database access, so the service has parsed its configuration by then.
-    The [profiler] options are registered by cinder.service, which also
-    sets up osprofiler. A process that never imported it has no profiler
-    to report to; importing it here would also register its command line
-    options after the arguments were parsed and fail the first database
-    access.
     """
-    try:
-        profiler = CONF.profiler
-    except cfg.NoSuchOptError:
-        return
+    # NOTE(geguileo): To avoid a cyclical dependency we import the
+    # group here.  Dependency cycle is objects.base requires db.api,
+    # which requires service which requires objects.base
+    CONF.import_group("profiler", "cinder.service")
     if (
         osprofiler_sqlalchemy
-        and profiler.enabled
-        and profiler.trace_sqlalchemy
+        and CONF.profiler.enabled
+        and CONF.profiler.trace_sqlalchemy
     ):
         osprofiler_sqlalchemy.add_tracing(sa, engine, "db")
 
@@ -1906,17 +1901,43 @@ def reservation_rollback(context, reservations, project_id=None):
 
 
 @require_context
+def quota_destroy_by_project(context, project_id):
+    """Destroy all limit quotas associated with a project.
+
+    Leaves usage and reservation quotas intact.
+    """
+    quota_destroy_all_by_project(context, project_id, only_quotas=True)
+
+
+# TODO(stephenfin): No one is using this except 'quota_destroy_by_project'
+# above, so the only_quotas=False path could be removed.
+@require_context
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 @main_context_manager.writer
-def quota_destroy_by_project(context, project_id):
-    """Destroy quotas associated with a project.
+def quota_destroy_all_by_project(context, project_id, only_quotas=False):
+    """Destroy all quotas associated with a project.
+
+    This includes limit quotas, usage quotas and reservation quotas.
+    Optionally can only remove limit quotas and leave other types as they are.
 
     :param context: The request context, for access checks.
     :param project_id: The ID of the project being deleted.
+    :param only_quotas: Only delete limit quotas, leave other types intact.
     """
     model_query(context, models.Quota).filter_by(project_id=project_id).update(
         models.Quota.delete_values()
     )
+
+    if only_quotas:
+        return
+
+    model_query(context, models.QuotaUsage, read_deleted="no").filter_by(
+        project_id=project_id
+    ).update(models.QuotaUsage.delete_values())
+
+    model_query(context, models.Reservation, read_deleted="no").filter_by(
+        project_id=project_id
+    ).update(models.Reservation.delete_values())
 
 
 @require_admin_context
@@ -6553,46 +6574,6 @@ def backup_get_all_active_by_window(context, begin, end=None, project_id=None):
         query = query.filter_by(project_id=project_id)
 
     return query.all()
-
-
-@require_context
-@main_context_manager.reader
-def backup_get_parent_for_incremental(
-    context,
-    volume_id,
-    volume_project_id,
-    before_data_timestamp=None
-):
-
-    authorize_project_context(context, volume_project_id)
-    # NOTE(crohmann): Find successful backups sorted by most recent
-    # data_timestamp. Apart from an AVAILABLE backup, any backup that is
-    # currently RESTORING to a new volume is also valid, as it's a stable,
-    # read-only source.
-    query = (
-        _backups_get_query(context=context, joined_load=False,
-                           project_only=True)
-        # NOTE(crohmann): required in case of non-project / admin scoped tokens
-        .filter_by(project_id=context.project_id)
-        .filter_by(volume_id=volume_id)
-        .filter(models.Backup.status.in_(
-            (
-                fields.BackupStatus.AVAILABLE,
-                fields.BackupStatus.RESTORING
-            )
-        ))
-        .order_by(
-            desc(models.Backup.data_timestamp),
-            desc(models.Backup.created_at)
-        )
-    )
-    # NOTE(crohmann): In case a backup with a data_timestamp
-    # before a certain time is required add this condition.
-    if before_data_timestamp:
-        query = query.filter(
-            models.Backup.data_timestamp < before_data_timestamp
-        )
-    return query.first()
 
 
 @handle_db_data_error
